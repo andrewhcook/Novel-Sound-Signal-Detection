@@ -2,8 +2,7 @@
 # Cognitive Remediation Tool for Auditory Hallucinations
 
 - This script is to be used with an initialized Raspberry Pi (running Raspberry Pi OS 64-bit full) connected to an IQaudIO Codec Zero HAT.
-- This python script interacts with the Raspberry Pi, attached hardware, and Google Gemini to record ambient sound and compare the last 15 seconds of recording versus the prior minute and 45 seconds and determine if a sound signal is present.
-- Google's Gemini API is queried to decide if a sound signal is detected in the final 15 seconds of the recording.
+- This python script interacts with the Raspberry Pi, attached hardware, and the librosa Python library to record ambient sound and compare the last 15 seconds of recording versus the prior minute and 45 seconds and determine if a novel sound signal is present.
 - If a novel sound signal is detected a green LED on the Codec Zero lights up, if not a red LED lights up.
 - This can be used by an indivual expericing transient auditory hallucinations to differentiate a hallucination from an actual ambient sound.
 
