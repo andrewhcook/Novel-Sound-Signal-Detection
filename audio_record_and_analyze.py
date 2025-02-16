@@ -1,21 +1,23 @@
 import signal
 from gpiozero import Button, LED
 import subprocess
+import numpy as np
+import librosa
 import time
 from time import sleep
+from scipy.stats import median_abs_deviation
 import os
-import google.generativeai as genai
 
-# set api key and initialize model
-API_KEY = os.environ.get("GOOGLE_API_KEY")
-genai.configure(api_key=API_KEY)
-model = genai.GenerativeModel(model_name="models/gemini-1.5-pro-latest")
+stop_recording = False
+buffer = []
 
 # Set the duration and sample rate
 max_duration = 120  # seconds
 fs = 44100  # Sample rate
 
-#create audio files
+# This function will be called to fill the buffer
+
+# Global flag
 recording_file = "/home/ac/recording"
 file_extension = ".wav"
 filename = recording_file + file_extension
@@ -40,11 +42,10 @@ if not temp_exists:
 temp2_exists = os.path.exists(pre_trimmed_filename)
 
 if not temp2_exists:
-    cmd = "ffmpeg -i {} -c copy {}".format(trimmed_filename, pre_trimmed_filename)
+    cmd = "ffmpeg -i {} -c copy {}".format(trimmed_filename, pre-trimmed_filename)
     subprocess.call(cmd, shell = True)
 
 
-#functions
 
 
 def process_terminate():
@@ -53,14 +54,13 @@ def process_terminate():
 
 
 def record_audio():
-    green_led.on()
-    red_led.on()
-    sleep(3)
-    green_led.off()
-    red_led.off()
+
     command = [ "arecord", "-f", "S16_LE", "-c", "1", "-r", "44100", filename]
     global process
     process = subprocess.Popen(command)
+
+green_led = LED(23)
+red_led = LED(24)
 
 
 def green_LED_on():
@@ -75,6 +75,7 @@ def red_LED_on():
     red_led.off()
 
 
+
 def get_duration(file_path):
     cmd = 'ffprobe -i {} -show_entries format=duration -of csv="p=0"'.format(file_path)
     bytecode = subprocess.check_output(cmd, shell=True)
@@ -83,15 +84,6 @@ def get_duration(file_path):
     print(output)
     return float(output)  # Duration in seconds
 
-
-def signal_handler():
-    process_terminate()
-    # add files together
-    cmd= 'ffmpeg -y -i {} -i {} -filter_complex [0:a][1:a]concat=n=2:v=0:a=1 {}'.format(trimmed_filename, filename, pre_trimmed_filename)
-    subprocess.call(cmd, shell=True)
-
-    clip_last_two_minutes(pre_trimmed_filename, trimmed_filename)
-    api_call()
 
 def clip_last_two_minutes(file_path, output_path):
     duration = get_duration(file_path)
@@ -103,36 +95,59 @@ def clip_last_two_minutes(file_path, output_path):
         cmd = 'ffmpeg -y -i {} -ss {} -t 120 {}'.format(file_path, start_time, output_path)
         subprocess.call(cmd, shell=True)
 
-def api_call():
-    print("openning trimmed_filename")
-    # Load and encode your audio data
-    with open(trimmed_filename, "rb") as f:
-         ambient = f.read()
-    print("uploading trimmed_filename")
-    sample_file = genai.upload_file(path= trimmed_filename,
-                            display_name="Trimmed_Recording")
-    print("uploaded {} as {}".format(sample_file.display_name, sample_file.uri))
-    uri = sample_file.uri
-    data = [
-         "does the final 15 seconds of this sound file contain any sounds that significantly differ from the profile of the first minute and 45 seconds? if a novel sound signal exists in the final 15 seconds of audio data preface your answer with a 1. If no such sound signal is present preface your answer with a 0 (1 or 0 should be the absolutely first character in your response)", sample_file ]
-    print("making api call")
-    response = model.generate_content(data)
-    print(response.text)
-    if response.text[0] == "0":
-        print("red on")
-        red_LED_on()
-    else:
-        print("green on")
+
+def signal_handler():
+    process_terminate()
+    # add files together
+    cmd= 'ffmpeg -y -i {} -i {} -filter_complex [0:a][1:a]concat=n=2:v=0:a=1 {}'.format(trimmed_filename, filename, pre_trimmed_filename)
+    subprocess.call(cmd, shell=True)
+    # clip resulting file
+    clip_last_two_minutes(pre_trimmed_filename, trimmed_filename)
+    # trigger signal_detection
+    # send LED signal
+    y, sr = librosa.load(trimmed_filename)
+
+    # Extract the first 1 minute and 45 seconds (105 seconds)
+    y_start = y[:105 * sr]
+
+    # Extract the last 15 seconds
+    y_end = y[-15 * sr:]
+
+    # Extract features (MFCCs)
+    mfcc_start = librosa.feature.mfcc(y=y_start, sr=sr)
+    mfcc_end = librosa.feature.mfcc(y=y_end, sr=sr)
+
+    # Compute the median and MAD of each MFCC
+    median_mfccs_start = np.median(mfcc_start, axis=1)
+    mad_mfccs_start = median_abs_deviation(mfcc_start, axis=1)
+
+    median_mfccs_end = np.median(mfcc_end, axis=1)
+    mad_mfccs_end = median_abs_deviation(mfcc_end, axis=1)
+
+    # Initialize a list to hold the outliers
+    outliers = []
+
+    # Define a smaller threshold for outlier detection
+    threshold = 1.5  # This value should be determined based on your data
+
+    # Check each MFCC of each frame for outliers
+    for i, (median_start, mad_start, median_end, mad_end) in enumerate(
+            zip(median_mfccs_start, mad_mfccs_start, median_mfccs_end, mad_mfccs_end)):
+        if median_start < median_end - threshold * mad_end:
+            outliers.append(i)
+    if len(outliers) > 0:
+        print("signal detected")
         green_LED_on()
-    genai.delete_file(sample_file.name)
+    else:
+        print("no signal detected")
+        red_LED_on()
+    print("found {} outlier(s)".format(len(outliers)))
     record_audio()
 
-# LEDs and button
-green_led = LED(23)
-red_led = LED(24)
+
 button = Button(27)
 
-#set signal handler and run program
 button.when_pressed = signal_handler
+
 record_audio()
 signal.pause()
